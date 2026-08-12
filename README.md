@@ -48,8 +48,8 @@
 - Adding, modifying, deleting, or overwriting `.lua` files in any watched directory automatically triggers a reload. No restart, no offline/online toggle needed.
 
 ### Injection
-- Add optional game-process library injection through `[inject]` in `opensteamtool.toml`.
-- Configure `enabled`, `library_x64`, and `library_x86`; the injected library must match the target process architecture.`library_x64` and `library_x86` may be absolute paths, or relative paths resolved from the Steam root directory.
+- Add optional game-process DLL injection through one or more `[[inject]]` entries in `opensteamtool.toml`.
+- Each entry sets a `path` (a bare name resolves next to `steam.exe`; an absolute path is used as-is) and optional conditions — `when_cmdline` (substring required in the launch command), `when_appids` (restrict to specific appids), and `all_games` (`true` = every game, `false` = only Lua-added games). A DLL injects when *every* condition it sets matches; multiple entries may target the same game and each DLL injects at most once.
 
 ### Family Sharing and Remote Play
 - Bypass Steam Family Sharing restrictions for games that have been added to the library with `addappid` in Lua. All accounts in the Steam Family that participate in sharing must use OpenSteamTool for this to work.
@@ -166,12 +166,13 @@ enable_api = true
 [lua]
 paths = []
 
-[inject]
-# Optional library injection into game processes.
-# The injected library must match the target process architecture.
-enabled = false
-# library_x64 = "OpenSteamTool.GameHook.x64.dll"
-# library_x86 = "OpenSteamTool.GameHook.x86.dll"
+# Optional DLL injection into game processes. Each [[inject]] entry is loaded
+# when every condition it sets matches the launch.
+# [[inject]]
+# path = "OpenSteamToolHook.dll"      # bare name resolves next to steam.exe; absolute path used as-is
+# when_cmdline = "-my_special_hook"   # optional: require this substring in the launch command (default: any)
+# when_appids = [1361510]             # optional: restrict to these appids (default: any)
+# all_games = false                   # optional: true injects into every game, false only into Lua-added games (default: false)
 
 # Optional metadata mirror. See "Steam version compatibility" below.
 [remote]

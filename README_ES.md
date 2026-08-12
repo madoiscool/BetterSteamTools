@@ -43,8 +43,8 @@
 - Añadir, modificar, eliminar o sobrescribir archivos `.lua` en cualquier directorio supervisado activa automáticamente una recarga. No se necesita reiniciar ni alternar entre modo desconectado/conectado.
 
 ### Inyección
-- Añade inyección opcional de bibliotecas en procesos de juego mediante `[inject]` en `opensteamtool.toml`.
-- Configura `enabled`, `library_x64` y `library_x86`; la biblioteca inyectada debe coincidir con la arquitectura del proceso de destino.`library_x64` y `library_x86` pueden ser rutas absolutas, o rutas relativas resueltas desde el directorio raíz de Steam.
+- Añade inyección opcional de DLL en procesos de juego mediante una o varias entradas `[[inject]]` en `opensteamtool.toml`.
+- Cada entrada define un `path` (un nombre simple se resuelve junto a `steam.exe`; una ruta absoluta se usa tal cual) y condiciones opcionales — `when_cmdline` (subcadena requerida en el comando de lanzamiento), `when_appids` (restringir a appids concretos) y `all_games` (`true` = todos los juegos, `false` = solo juegos añadidos por Lua). Un DLL se inyecta cuando coinciden *todas* las condiciones que define; varias entradas pueden apuntar al mismo juego y cada DLL se inyecta como máximo una vez.
 
 ### Préstamo familiar y juego en remoto
 - Omite las restricciones de Steam Family Sharing para los juegos que se hayan añadido a la biblioteca con `addappid` en Lua. Todas las cuentas de la familia de Steam que participen en el préstamo familiar deben usar OpenSteamTool para que esto funcione.
@@ -154,12 +154,13 @@ enable_api = true
 [lua]
 paths = []
 
-[inject]
-# Inyección opcional de bibliotecas en procesos de juego.
-# La biblioteca inyectada debe coincidir con la arquitectura del proceso de destino.
-enabled = false
-# library_x64 = "OpenSteamTool.GameHook.x64.dll"
-# library_x86 = "OpenSteamTool.GameHook.x86.dll"
+# Inyección opcional de DLL en procesos de juego. Cada entrada [[inject]] se carga
+# cuando coinciden todas las condiciones que define.
+# [[inject]]
+# path = "OpenSteamToolHook.dll"      # un nombre simple se resuelve junto a steam.exe; una ruta absoluta se usa tal cual
+# when_cmdline = "-my_special_hook"   # opcional: requiere esta subcadena en el comando de lanzamiento (por defecto: cualquiera)
+# when_appids = [1361510]             # opcional: restringir a estos appids (por defecto: cualquiera)
+# all_games = false                   # opcional: true inyecta en todos los juegos, false solo en juegos añadidos por Lua (por defecto: false)
 
 # Espejo (mirror) de metadatos opcional. Consulta "Compatibilidad con versiones de Steam" más abajo.
 [remote]
