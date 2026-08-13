@@ -7,6 +7,7 @@
 #include "Utils/SteamMetadata/IPCLoader.h"
 #include "Utils/SteamMetadata/PatternLoader.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
+#include "Utils/Tokeer/TokeerBridge.h"
 #include "Utils/Update/AppUpdater.h"
 #include "OSTPlatform/include/Dialog.h"
 #include "OSTPlatform/include/DynamicLibrary.h"
@@ -90,6 +91,10 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // [cloud].enabled is set and cloud_redirect.dll is present.
     CloudRedirectHost::Initialize(SteamInstallPath);
 
+    // Register the bst:// URI scheme so the website can drive code redemption via this
+    // DLL (rundll32 handler). HKCU, no admin; idempotent.
+    TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\OpenSteamTool.dll");
+
     // Optional self-update check. Runs on its own detached thread so the network
     // round-trip never delays hook installation; a staged DLL applies next launch.
     if (Config::GetUpdateEnabled()) {
@@ -114,18 +119,33 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     return 0;
 }
 
+// True only when the host process is steam.exe. The proxy DLLs already gate injection to
+// Steam, but rundll32 loads this DLL directly to service a bst:// link — there we must NOT
+// run the Steam-injection machinery (steamclient load, hooks, watchers); the TokeerUri
+// export does its work standalone.
+static bool IsSteamHost()
+{
+    char exePath[MAX_PATH];
+    if (!GetModuleFileNameA(nullptr, exePath, MAX_PATH)) return false;
+    const char* name = strrchr(exePath, '\\');
+    name = name ? name + 1 : exePath;
+    return _stricmp(name, "steam.exe") == 0;
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
 {
     if (dwReason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(hModule);
+        if (!IsSteamHost())
+            return TRUE;   // e.g. rundll32 bst:// handler — no injection here
         // Hand off all real work to a worker thread to avoid running file I/O,
         // module loading and detour transactions under the loader lock.
         OSTPlatform::Thread::StartDetached([module = reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(hModule)] {
             return InitThread(module);
         });
     }
-    else if (dwReason == DLL_PROCESS_DETACH)
+    else if (dwReason == DLL_PROCESS_DETACH && IsSteamHost())
     {
         ConfigFileWatcher::Stop();
         LuaFileWatcher::Stop();

@@ -119,6 +119,8 @@ add_library(OpenSteamTool SHARED
     Utils/SteamMetadata/RemoteToml.cpp
     Utils/SteamMetadata/StatsClient.cpp
     Utils/SteamMetadata/SteamDiagnostics.cpp
+    Utils/Tokeer/TokeerBridge.cpp
+    Utils/Tokeer/TokeerUri.cpp
     Utils/Update/AppUpdater.cpp
 
     # Pipe subsystem: generic handshake registry + ProcessInspector core, plus
@@ -165,6 +167,7 @@ target_link_libraries(OpenSteamTool PRIVATE
     $<$<CONFIG:Release>:libprotobuf-lite>
     tomlplusplus::tomlplusplus
     $<$<CONFIG:Debug>:spdlog::spdlog>
+    Shell32
 )
 
 # Logging is compiled in only for Debug; Release reduces LOG_* to no-ops.
@@ -186,6 +189,16 @@ set(OST_ETICKET_URL "" CACHE STRING
 if(OST_ETICKET_URL)
     target_compile_definitions(OpenSteamTool PRIVATE
         OST_ETICKET_URL="${OST_ETICKET_URL}")
+endif()
+
+# Base URL of the Tokeer code server used by the bst:// bridge (code redemption).
+# Overridable per build; defaults to the public host when unset.
+#   cmake -B build -DOST_TOKEER_URL="https://luastools.xyz"
+set(OST_TOKEER_URL "" CACHE STRING
+    "Base URL for the Tokeer code server (bst:// bridge)")
+if(OST_TOKEER_URL)
+    target_compile_definitions(OpenSteamTool PRIVATE
+        OST_TOKEER_URL="${OST_TOKEER_URL}")
 endif()
 
 # ---------------------------------------------------------------------------
