@@ -1,0 +1,3 @@
+version = "v1.0.0"
+path    = "opensteamtool/v1.0.0/OpenSteamTool.dll"
+sha256  = "1d8fb3056f6642d00351d4bc4fb62003fba61320c9e09540d45dd6f9dc6ee618"
