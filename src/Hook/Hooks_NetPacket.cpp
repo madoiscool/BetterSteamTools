@@ -493,7 +493,9 @@ namespace Hooks_NetPacket_UserStats {
         if (!req.ParseFromArray(pBody, cbBody)) return false;
         if (!req.has_game_id()) return false;
         const AppId_t appId = static_cast<AppId_t>(req.game_id());
-        if (!LuaConfig::HasDepot(appId)) return false;   // owned: online path
+        // When local_only is enabled, allow all games (including cracked) to store achievements locally.
+        // Otherwise, only allow games in the depot config (owned games).
+        if (!Config::GetStatsLocalOnly() && !LuaConfig::HasDepot(appId)) return false;
 
         std::vector<std::pair<uint32_t, uint32_t>> pairs;
         pairs.reserve(static_cast<size_t>(req.stats_to_store_size()));
@@ -519,7 +521,9 @@ namespace Hooks_NetPacket_UserStats {
             return false;
         if (!req.has_game_id()) return false;
         const AppId_t appId = static_cast<AppId_t>(req.game_id());
-        if (!LuaConfig::HasDepot(appId)) return false;   // owned: online path
+        // When local_only is enabled, allow all games (including cracked) to store achievements locally.
+        // Otherwise, only allow games in the depot config (owned games).
+        if (!Config::GetStatsLocalOnly() && !LuaConfig::HasDepot(appId)) return false;
 
         std::vector<std::pair<uint32_t, uint32_t>> pairs;
         pairs.reserve(static_cast<size_t>(req.stats_to_store_size()));
@@ -540,7 +544,9 @@ namespace Hooks_NetPacket_UserStats {
         if (!req.ParseFromArray(pBody, cbBody)) return false;
         if (!req.has_game_id()) return false;
         const AppId_t appId = static_cast<AppId_t>(req.game_id());
-        if (!LuaConfig::HasDepot(appId)) return false;   // owned: online path
+        // When local_only is enabled, allow all games (including cracked) to store achievements locally.
+        // Otherwise, only allow games in the depot config (owned games).
+        if (!Config::GetStatsLocalOnly() && !LuaConfig::HasDepot(appId)) return false;
 
         std::vector<std::pair<uint32_t, uint32_t>> pairs;
         pairs.reserve(static_cast<size_t>(req.stats_size()));
