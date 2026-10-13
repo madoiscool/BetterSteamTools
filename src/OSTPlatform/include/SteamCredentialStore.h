@@ -30,4 +30,13 @@ namespace OSTPlatform::SteamCredentialStore {
 
     Status GetActiveUser(uint32_t& accountId, std::wstring& universe);
 
+    // Enumerate the app ids that have a per-app credential key in the store.
+    // Windows backend: subkeys of HKCU\Software\Valve\Steam\Apps whose names
+    // parse as decimal app ids (anything else is skipped). Returns Ok with an
+    // empty vector when the root key exists but holds no app keys, and
+    // NotFound when the root key is missing. Used to find a signed ticket to
+    // forge a target app's ownership ticket from when the usual sources are
+    // absent.
+    Status EnumerateAppIds(std::vector<uint32_t>& appIds);
+
 } // namespace OSTPlatform::SteamCredentialStore

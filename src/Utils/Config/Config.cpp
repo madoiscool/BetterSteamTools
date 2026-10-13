@@ -1,6 +1,7 @@
 #include "Config.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
+#include "Utils/Tickets/TicketAuthority.h"
 
 #include <toml++/toml.hpp>
 
@@ -19,6 +20,7 @@ namespace {
         std::vector<std::string> remoteUrlTemplates;
         bool statsEnableApi = true;
         bool updateEnabled = true;
+        TicketPolicy ticketPolicy;
         DonateSettings donate;
         std::vector<InjectDll> injectDlls;
         CloudSettings cloud;
@@ -56,6 +58,7 @@ namespace {
         remoteUrlTemplates     = snapshot.remoteUrlTemplates;
         statsEnableApi         = snapshot.statsEnableApi;
         updateEnabled          = snapshot.updateEnabled;
+        ticketPolicy           = snapshot.ticketPolicy;
         donate                 = snapshot.donate;
         injectDlls             = snapshot.injectDlls;
         cloudEnabled           = snapshot.cloud.enabled;
@@ -70,12 +73,18 @@ namespace {
     }
 
     LoadResult ApplySnapshotLocked(const Snapshot& snapshot) {
-        std::lock_guard lock(g_mutex);
         LoadResult result;
-        result.luaPathsChanged = luaPaths != snapshot.luaPaths;
-        ApplySnapshot(snapshot);
-        g_loadedOnce = true;
-        result.applied = true;
+        {
+            std::lock_guard lock(g_mutex);
+            result.luaPathsChanged = luaPaths != snapshot.luaPaths;
+            ApplySnapshot(snapshot);
+            g_loadedOnce = true;
+            result.applied = true;
+        }
+        // Ticket decisions depend on this policy: drop the cache so the next
+        // launch re-evaluates. Called after the config lock is released so the
+        // lock order stays one-way (ticket authority -> config).
+        TicketAuthority::Reset();
         return result;
     }
 
@@ -223,6 +232,17 @@ namespace {
                     snapshot.cloud.library = *val;
             }
 
+            // [tickets]
+            if (auto tickets = tbl["tickets"].as_table()) {
+                if (auto v = (*tickets)["identity_mode"].value<std::string>()) {
+                    // "best_effort" (default) serves the best available bytes even
+                    // when identities mix; "strict" refuses such answers instead.
+                    if (*v == "strict")            snapshot.ticketPolicy.allowMixedIdentity = false;
+                    else if (*v == "best_effort")  snapshot.ticketPolicy.allowMixedIdentity = true;
+                    else LOG_WARN("[tickets] identity_mode \"{}\" unknown (use \"best_effort\" or \"strict\")", *v);
+                }
+            }
+
             ApplyManifestProvider(snapshot.manifestProvider);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
@@ -297,6 +317,11 @@ namespace {
     bool GetUpdateEnabled() {
         std::lock_guard lock(g_mutex);
         return updateEnabled;
+    }
+
+    TicketPolicy GetTicketPolicy() {
+        std::lock_guard lock(g_mutex);
+        return ticketPolicy;
     }
 
     CloudSettings GetCloudSettings() {

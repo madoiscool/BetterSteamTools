@@ -4,6 +4,7 @@
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/SteamMetadata/StatsClient.h"
 #include "Utils/Tickets/AppTicket.h"
+#include "Utils/Tickets/TicketAuthority.h"
 
 #include <lua.hpp>
 
@@ -424,6 +425,8 @@ namespace LuaConfig{
         if (!AppTicket::WriteAppOwnershipTicket(appId, binary))
             return luaL_error(L, "setAppTicket: failed to write credential store");
 
+        TicketAuthority::NoteImport(appId, TicketAuthority::ImportKind::AppTicket, binary);
+
         return 0;
     }
 
@@ -457,6 +460,8 @@ namespace LuaConfig{
 
         if (!AppTicket::WriteEncryptedTicket(appId, binary))
             return luaL_error(L, "setETicket: failed to write credential store");
+
+        TicketAuthority::NoteImport(appId, TicketAuthority::ImportKind::ETicket, binary);
 
         return 0;
     }

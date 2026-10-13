@@ -15,6 +15,7 @@ namespace {
 constexpr const wchar_t* kValueSteamId = L"SteamID";
 constexpr const wchar_t* kValueAppTicket = L"AppTicket";
 constexpr const wchar_t* kValueEncryptedTicket = L"ETicket";
+constexpr const wchar_t* kAppsRootKeyPath = L"Software\\Valve\\Steam\\Apps";
 constexpr const wchar_t* kActiveProcessKeyPath = L"Software\\Valve\\Steam\\ActiveProcess";
 constexpr const wchar_t* kValueActiveUser = L"ActiveUser";
 constexpr const wchar_t* kValueUniverse = L"Universe";
@@ -190,6 +191,48 @@ Status WriteSteamId(uint32_t appId, uint64_t steamId) {
     const DWORD bytes = static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t));
     return FromLStatus(WriteValue(appId, kValueSteamId, REG_SZ,
                                   reinterpret_cast<const BYTE*>(value.c_str()), bytes));
+}
+
+// Subkey scan of HKCU\Software\Valve\Steam\Apps. Steam itself writes one key
+// per app that has credentials (tickets / SteamID), so this doubles as "apps
+// this account has locally usable ticket material for". Bounded in both entry
+// count and name length so a corrupted hive cannot stall the caller.
+Status EnumerateAppIds(std::vector<uint32_t>& appIds) {
+    appIds.clear();
+
+    Windows::UniqueRegKey key;
+    LSTATUS status = RegOpenKeyExW(HKEY_CURRENT_USER, kAppsRootKeyPath, 0,
+                                   KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE, key.put());
+    if (status != ERROR_SUCCESS) {
+        const auto mapped = FromLStatus(status);
+        if (mapped == Status::NotFound) {
+            OSTP_LOG_DEBUG("SteamCredentialStore: Apps key missing status={}", status);
+        } else {
+            OSTP_LOG_WARN("SteamCredentialStore: failed to open Apps key status={}", status);
+        }
+        return mapped;
+    }
+
+    constexpr DWORD kMaxEntries = 4096;
+    constexpr DWORD kMaxNameChars = 64;
+    for (DWORD index = 0; index < kMaxEntries; ++index) {
+        wchar_t name[kMaxNameChars];
+        DWORD nameChars = static_cast<DWORD>(sizeof(name) / sizeof(name[0]));
+        status = RegEnumKeyExW(key.get(), index, name, &nameChars,
+                               nullptr, nullptr, nullptr, nullptr);
+        if (status == ERROR_NO_MORE_ITEMS) break;
+        if (status != ERROR_SUCCESS) {
+            OSTP_LOG_WARN("SteamCredentialStore: Apps enumeration stopped at index={} status={}", index, status);
+            break;
+        }
+
+        const auto parsed = Numbers::ParseUInt32(std::wstring_view(name, nameChars));
+        if (!parsed || *parsed == 0) continue;
+        appIds.push_back(*parsed);
+    }
+
+    OSTP_LOG_DEBUG("SteamCredentialStore: enumerated {} app credential keys", appIds.size());
+    return Status::Ok;
 }
 
 Status GetActiveUser(uint32_t& accountId, std::wstring& universe) {
