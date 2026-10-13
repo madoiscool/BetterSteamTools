@@ -240,4 +240,14 @@ std::optional<std::vector<uint8_t>> FetchOwnershipTicket(AppId_t appId, std::spa
     return t.ownership;
 }
 
+std::optional<FetchedTickets> FetchTickets(AppId_t appId, std::span<const uint8_t> nonce, uint64_t existingSteamId) {
+    CachedTickets t;
+    if (!EnsureFetched(appId, nonce, existingSteamId, t) || t.ownership.empty()) return std::nullopt;
+    FetchedTickets out;
+    out.ownership = std::move(t.ownership);
+    out.eticket   = std::move(t.eticket);
+    out.steamId   = t.steamId;
+    return out;
+}
+
 } // namespace EticketClient

@@ -47,4 +47,17 @@ namespace EticketClient {
     // nonce and existingSteamId are only used on the first fetch for an app.
     std::optional<std::vector<uint8_t>> FetchOwnershipTicket(AppId_t appId, std::span<const uint8_t> nonce, uint64_t existingSteamId = 0);
 
+    // Both halves of one mint, plus the pool account they belong to. Lets a
+    // caller serve the ownership ticket and report the matching SteamID from
+    // the same decision. Returns nullopt on any failure (disabled, backend
+    // down, bad response) or when the response carries no ownership ticket.
+    struct FetchedTickets
+    {
+        std::vector<uint8_t> ownership;
+        std::vector<uint8_t> eticket;
+        uint64_t             steamId = 0;
+    };
+    std::optional<FetchedTickets> FetchTickets(AppId_t appId, std::span<const uint8_t> nonce,
+                                               uint64_t existingSteamId = 0);
+
 } // namespace EticketClient

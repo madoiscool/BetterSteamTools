@@ -5,6 +5,7 @@
 #include "OSTPlatform/include/Numbers.h"
 #include "OSTPlatform/include/SteamCredentialStore.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/Tickets/TicketAuthority.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -129,6 +130,11 @@ void Redeem(const std::string& code) {
 
     LOG_INFO("TokeerBridge: redeemed code for app {} ({} + {} bytes)",
              *appId, appBytes->size(), etBytes->size());
+
+    // Hand the imported pair to the ticket authority so the identity these
+    // tickets belong to drives both the served bytes and the spoofed SteamID.
+    TicketAuthority::NoteImport(*appId, TicketAuthority::ImportKind::AppTicket, *appBytes);
+    TicketAuthority::NoteImport(*appId, TicketAuthority::ImportKind::ETicket, *etBytes);
 
     const bool launchNow = OSTPlatform::Dialog::ShowConfirm(
         "Code Redeemed!",

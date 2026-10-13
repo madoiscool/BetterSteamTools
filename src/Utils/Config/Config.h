@@ -26,6 +26,21 @@ namespace Config {
         bool                        allGames = false;  // false: only Lua-unlocked games
     };
 
+    // [tickets] - how the ownership-ticket reply is decided (TicketAuthority).
+    struct TicketPolicy {
+        bool                 preferStored        = true;  // answer with a validated stored ticket when one exists
+        bool                 allowForge          = true;  // fall back to forging from a locally cached blob
+        bool                 requireAppIdMatch   = true;  // stored tickets must embed the requested app id
+        bool                 requireAccountMatch = true;  // forge bases must belong to the signed-in account
+        bool                 scanCredentialStore = true;  // last resort: scan per-app credential keys
+        bool                 allowMixedIdentity  = true;  // best-effort: serve the best available bytes even when the
+                                                          // expected identity is another account (identity_mode="strict" refuses)
+        bool                 vault               = true;  // keep a private copy of signed material under <Steam>/opensteamtool/vault
+        bool                 allowBackend        = true;  // ask a configured ticket backend as the last resort
+        bool                 report              = true;  // write opensteamtool/tickets.json
+        std::vector<AppId_t> sources;                     // extra forge bases; empty = built-in defaults
+    };
+
     struct CloudSettings {
         bool enabled = false;
         std::string library;
@@ -46,6 +61,7 @@ namespace Config {
     CloudSettings GetCloudSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
+    TicketPolicy GetTicketPolicy();
 
     // [donate] — contribute manifest request codes for depots this account owns.
     struct DonateSettings {
@@ -82,6 +98,9 @@ namespace Config {
 
     // [update] - self-update check on startup (staged for next Steam launch).
     inline bool updateEnabled = true;
+
+    // [tickets] - ownership-ticket answer policy (see TicketAuthority).
+    inline TicketPolicy ticketPolicy;
 
     // [donate] - mint manifest request codes on request for depots this account
     // owns. Codes are bound to (depot, manifest) and rotate within minutes, so

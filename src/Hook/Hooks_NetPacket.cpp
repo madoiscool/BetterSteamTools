@@ -640,7 +640,7 @@ namespace Hooks_NetPacket_OwnershipTicket {
         // here caused a cross-check mismatch → 012 even when the SteamID was the
         // same account. Only mint from the backend when the credential store has
         // no valid ticket (existingSteamId == 0).
-        auto stored = AppTicket::GetAppOwnershipTicketFromCredentialStore(resp.app_id());
+        auto stored = AppTicket::GetValidatedAppOwnershipTicketFromCredentialStore(resp.app_id());
         const uint64_t existingSteamId = AppTicket::ExtractSteamIdFromTicketBytes(stored);
 
         std::vector<uint8_t> ticketBytes;

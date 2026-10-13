@@ -5,6 +5,7 @@
 #include "Utils/Config/LuaFileWatcher.h"
 #include "Utils/Config/ConfigFileWatcher.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/Tickets/TicketAuthority.h"
 #include "OSTPlatform/include/DirectoryWatch.h"
 
 #include <atomic>
@@ -59,6 +60,9 @@ void RestartLuaWatcher() {
     LuaFileWatcher::Stop();
     LuaConfig::ReloadDirectories(watchDirs);
     LuaFileWatcher::Start(watchDirs);
+
+    // The managed app set changed: cached ticket decisions may no longer apply.
+    TicketAuthority::Reset();
 
     Hooks_Package::NotifyLicenseChanged();
     LOG_INFO("Lua directories refreshed after config reload: {}", static_cast<uint32_t>(watchDirs.size()));

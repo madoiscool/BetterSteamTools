@@ -10,46 +10,41 @@ namespace AppTicket {
     inline constexpr uint32 kAppTicketAppIdOffset = 16;
     inline constexpr uint32 kAppTicketSignatureSize = 128;
 
-    enum class AppTicketSource {
-        CredentialStoreOnly,
-        ForgeOnly,
-        CredentialStoreThenForge,
-    };
-
-    struct AppOwnershipTicket {
-        std::vector<uint8_t> data;
-        uint32 totalSize = 0;
-        uint32 appIdOffset = kAppTicketAppIdOffset;
-        uint32 steamIdOffset = kAppTicketSteamIdOffset;
-        uint32 signatureOffset = 0;
-        uint32 signatureSize = kAppTicketSignatureSize;
-    };
-
-    // Reads the app ownership ticket cached by Steam's local credential store.
-    // Returns an empty vector when no ticket is available.
+    // Raw read of the credential-store ticket for appId (gated by the Lua
+    // addappid list). Returns an empty vector when no credential exists.
     std::vector<uint8_t> GetAppOwnershipTicketFromCredentialStore(AppId_t appId);
 
-    bool GetAppOwnershipTicket(AppId_t appId, AppOwnershipTicket& ticket, AppTicketSource source);
+    // Same read, additionally requiring the blob to embed appId at
+    // kAppTicketAppIdOffset. Stale entries written for another app are ignored.
+    std::vector<uint8_t> GetValidatedAppOwnershipTicketFromCredentialStore(AppId_t appId);
 
-    // Reads the encrypted app ticket cached by Steam's local credential store.
-    // Returns an empty vector when no ticket is available.
+    // Encrypted app ticket (strict Denuvo) from the credential store.
     std::vector<uint8_t> GetEncryptedTicketFromCredentialStore(AppId_t appId);
 
-    //Get spoof steamID From the cached AppOwnershipTicket for the given AppId.
+    // True when a raw blob is a plausible signed ticket: longer than the
+    // 128-byte signature it carries, within a sane size, with a non-zero
+    // signature-offset word. Placeholder blobs fail this.
+    bool IsUsableForgeSourceTicket(const std::vector<uint8_t>& data);
+
+    // Builds a ticket for appId from any signed source blob by splicing appId
+    // ahead of the trailing signature - the spot SteamDRMP's parser reads as
+    // the app id, which the signature does not cover. Returns empty when the
+    // source is too small to carry a signature.
+    std::vector<uint8_t> ForgeFromSource(AppId_t appId, const std::vector<uint8_t>& source);
+
+    // SteamID to report for appId: the stored credential identity while the
+    // ticket authority answers from the store, otherwise 0 so the real account
+    // identity stays consistent with the bytes actually served.
     uint64_t GetSpoofSteamID(AppId_t appId);
 
-    // Parses the SteamID baked into app-ownership-ticket bytes (offset
-    // kAppTicketSteamIdOffset). Returns 0 if the ticket is too short to
-    // contain one. Lets callers identify which account a ticket belongs to
-    // without duplicating the layout knowledge.
+    // Parses the SteamID baked into ticket bytes (kAppTicketSteamIdOffset).
+    // Returns 0 when the blob is too short to contain one.
     uint64_t ExtractSteamIdFromTicketBytes(const std::vector<uint8_t>& ticket);
 
-    // Write AppTicket binary data to Steam's local credential store.
+    // Write AppTicket / ETicket / SteamID binary data to Steam's local
+    // credential store.
     bool WriteAppOwnershipTicket(AppId_t appId, const std::vector<uint8_t>& data);
-
-    // Write ETicket binary data to Steam's local credential store.
     bool WriteEncryptedTicket(AppId_t appId, const std::vector<uint8_t>& data);
-
-    // Write authorized SteamID to Steam's local credential store.
     bool WriteSteamID(AppId_t appId, uint64_t steamId);
-}
+
+} // namespace AppTicket

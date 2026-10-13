@@ -3,6 +3,7 @@
 #include "PendingAPICalls.h"
 #include "Utils/Tickets/AppTicket.h"
 #include "Utils/Tickets/EticketClient.h"
+#include "Utils/Tickets/TicketAuthority.h"
 #include "Pipe/PipeManager.h"
 #include "Pipe/Features/DenuvoAuth/DenuvoAuth.h"
 #include "Utils/Logging/Log.h"
@@ -56,40 +57,39 @@ namespace {
         LOG_IPC_DEBUG("IClientUser::GetAppOwnershipTicketExtendedData:{}", req.DebugString());
         if (req.cbMaxTicket() < 0) return;
 
-        AppTicket::AppOwnershipTicket ticket{};
         AppId_t appId = req.unAppID() == kOnlineFixAppId ? Hooks_Misc::ResolveAppId() : req.unAppID();
-        
-        AppTicket::AppTicketSource ticketSource;
-        if (PipeManager::DenuvoAuth::IsAuthorizedPipe(pipe)) {
-            ticketSource = AppTicket::AppTicketSource::CredentialStoreOnly;
-        } else {
-            // Outside the auth window: prefer credential-store ticket (pool SteamID)
-            // over ForgeOnly (which uses app 7's ticket and carries the real SteamID).
-            // When the 858 network spoof is also active, both paths must agree on the
-            // same SteamID or Denuvo cross-checks them and rejects (error 54).
-            LOG_IPC_DEBUG("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} not in authorization window, credential store preferred", appId);
-            ticketSource = AppTicket::AppTicketSource::CredentialStoreThenForge;
-        }        
-        if (!AppTicket::GetAppOwnershipTicket(appId, ticket, ticketSource)) return;
 
-        if (ticket.data.size() > static_cast<size_t>(req.cbMaxTicket())) {
+        // The ticket authority owns this decision: it answers with a validated
+        // stored ticket when one exists and otherwise forges from a locally
+        // cached base, recording why. The same decision drives the SteamID
+        // spoof, so the bytes served and the identity reported cannot disagree;
+        // "nothing servable" here is the launch-failure class seen as error 54.
+        const bool authorized = PipeManager::DenuvoAuth::IsAuthorizedPipe(pipe);
+        const TicketAuthority::Decision decision = TicketAuthority::Resolve(appId);
+        if (!decision.servable) {
+            LOG_IPC_WARN("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} authorized={} - {}",
+                         appId, authorized, decision.reason);
+            return;
+        }
+
+        if (decision.bytes.size() > static_cast<size_t>(req.cbMaxTicket())) {
             LOG_IPC_WARN("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} ticket too large ({} bytes) for buffer ({} bytes)",
-                         appId, ticket.data.size(), req.cbMaxTicket());
+                         appId, decision.bytes.size(), req.cbMaxTicket());
             return;
         }
 
         GetAppOwnershipTicketExtendedDataResp resp{pWrite, static_cast<size_t>(req.cbMaxTicket())};
         if (!resp.ok()) return;
 
-        resp.set_returnValue(ticket.totalSize);
-        if (!resp.set_pTicket(ticket.data)) return;
-        resp.set_piAppId(ticket.appIdOffset);
-        resp.set_piSteamId(ticket.steamIdOffset);
-        resp.set_piSignature(ticket.signatureOffset);
-        resp.set_pcbSignature(ticket.signatureSize);
+        resp.set_returnValue(decision.totalSize);
+        if (!resp.set_pTicket(decision.bytes)) return;
+        resp.set_piAppId(decision.appIdOffset);
+        resp.set_piSteamId(decision.steamIdOffset);
+        resp.set_piSignature(decision.signatureOffset);
+        resp.set_pcbSignature(decision.signatureSize);
 
-        LOG_IPC_DEBUG("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} {}", 
-                        appId,resp.DebugString());
+        LOG_IPC_DEBUG("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} {} ({})", 
+                        appId,resp.DebugString(), TicketAuthority::ToString(decision.provenance));
     }
 
     // [Post-Handler]: IClientUser::RequestEncryptedAppTicket
@@ -111,10 +111,10 @@ namespace {
             std::span<const uint8_t> nonce;
             if (req.ok()) nonce = req.pData();
             // Whatever account the registry's current static ticket already
-            // belongs to (0 if none) — lets the backend pin the mint to that
-            // SAME account instead of risking a different pool pick.
+            // belongs to (0 if none or stale) - lets the backend pin the mint
+            // to that SAME account instead of risking a different pool pick.
             const uint64_t existingSteamId = AppTicket::ExtractSteamIdFromTicketBytes(
-                AppTicket::GetAppOwnershipTicketFromCredentialStore(appId));
+                AppTicket::GetValidatedAppOwnershipTicketFromCredentialStore(appId));
             // Mint a fresh eticket whenever the credential store already has a ticket
             // for this app (existingSteamId != 0). The minted eticket is pinned to
             // the same pool account via existingSteamId, which matches GetSteamID's
