@@ -26,6 +26,13 @@ namespace Config {
         bool                        allGames = false;  // false: only Lua-unlocked games
     };
 
+    // [tickets] - how the ownership-ticket reply is decided (TicketAuthority).
+    struct TicketPolicy {
+        bool allowMixedIdentity = true;  // identity_mode "best_effort" (default) serves the
+                                         // best available bytes; "strict" refuses answers
+                                         // whose identities would mix
+    };
+
     struct CloudSettings {
         bool enabled = false;
         std::string library;
@@ -46,6 +53,7 @@ namespace Config {
     CloudSettings GetCloudSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
+    TicketPolicy GetTicketPolicy();
 
     // [donate] — contribute manifest request codes for depots this account owns.
     struct DonateSettings {
@@ -82,6 +90,9 @@ namespace Config {
 
     // [update] - self-update check on startup (staged for next Steam launch).
     inline bool updateEnabled = true;
+
+    // [tickets] - ownership-ticket answer policy (see TicketAuthority).
+    inline TicketPolicy ticketPolicy;
 
     // [donate] - mint manifest request codes on request for depots this account
     // owns. Codes are bound to (depot, manifest) and rotate within minutes, so

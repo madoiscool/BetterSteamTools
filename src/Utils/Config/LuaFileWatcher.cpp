@@ -3,6 +3,7 @@
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/CloudRedirect/CloudRedirectHost.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/Tickets/TicketAuthority.h"
 #include "OSTPlatform/include/DirectoryWatch.h"
 
 #include <algorithm>
@@ -114,6 +115,9 @@ void ProcessChanges(const std::vector<FileChange>& changes) {
             LuaConfig::ParseFile(change.path);
         }
     }
+
+    // App ids may have been added or removed: drop cached ticket decisions.
+    TicketAuthority::Reset();
 
     Hooks_Package::NotifyLicenseChanged();
     CloudRedirectHost::SyncAppSet();
