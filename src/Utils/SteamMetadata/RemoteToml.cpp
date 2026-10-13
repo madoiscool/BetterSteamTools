@@ -1,4 +1,5 @@
 #include "RemoteToml.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
 #include "Utils/Config/Config.h"
 #include "Utils/Logging/Log.h"
@@ -6,10 +7,12 @@
 
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <string_view>
 #include <vector>
+#include <windows.h>
 
 namespace RemoteToml {
 
@@ -96,19 +99,35 @@ Result Fetch(const Request& request)
              request.channel, request.component, out.sha256, hashMs);
 
     // 2. Cache path & dir.
-    fs::path steamRoot = fs::path(request.dllPath).parent_path();
+    fs::path steamRoot = fs::path(OSTPlatform::Encoding::Utf8ToWide(request.dllPath)).parent_path();
     fs::path cacheDir  = steamRoot / "opensteamtool" / request.channel / request.component;
     fs::path cachePath = cacheDir / (out.sha256 + ".toml");
-    const std::string cachePathText = cachePath.string();
+    const std::string cachePathText = OSTPlatform::Encoding::WideToUtf8(cachePath.wstring());
 
-    std::error_code mkdirEc;
-    fs::create_directories(cacheDir, mkdirEc);
-    if (mkdirEc) {
-        LOG_WARN("RemoteToml({}/{}): could not create cache dir {} ({})",
-                 request.channel, request.component, cacheDir.string(), mkdirEc.message());
+    // Check local cache first (pattern & IPC files are immutable per DLL SHA-256).
+    std::error_code ec;
+    if (fs::exists(cachePath, ec) && !ec) {
+        const auto sz = fs::file_size(cachePath, ec);
+        if (!ec && sz > 0) {
+            std::ifstream ifs(cachePath, std::ios::binary);
+            if (ifs) {
+                std::string buf((std::istreambuf_iterator<char>(ifs)),
+                                 std::istreambuf_iterator<char>());
+                if (!buf.empty()) {
+                    LOG_INFO("RemoteToml({}/{}): loaded from cache {}",
+                             request.channel, request.component, cachePathText);
+                    out.body = std::move(buf);
+                    out.ok = true;
+                    out.fromCache = true;
+                    return out;
+                }
+            }
+            LOG_WARN("RemoteToml({}/{}): cache file exists but failed to read or empty: {}",
+                     request.channel, request.component, cachePathText);
+        }
     }
 
-    // 3. Try remote (mirror chain with early-out on 404).
+    // 3. Cache miss -> Try remote (mirror chain with early-out on 404).
     const std::vector<std::string> urlTemplates = BuildUrlTemplates();
     OSTPlatform::Http::Result http;
     std::string lastUrl;
@@ -135,49 +154,50 @@ Result Fetch(const Request& request)
         }
     }
 
-    // 4. Remote OK → write cache, return body.
+    // 4. Remote OK -> write cache atomically, return body.
     if (http.ok && http.status == 200 && !http.body.empty()) {
-        std::ofstream ofs(cachePath, std::ios::binary);
+        std::error_code mkdirEc;
+        fs::create_directories(cacheDir, mkdirEc);
+        if (mkdirEc) {
+            LOG_WARN("RemoteToml({}/{}): could not create cache dir {} ({})",
+                     request.channel, request.component,
+                     OSTPlatform::Encoding::WideToUtf8(cacheDir.wstring()), mkdirEc.message());
+        }
+
+        std::string tempFileName = std::format("{}_{}.tmp", out.sha256, GetCurrentProcessId());
+        fs::path tempPath = cacheDir / tempFileName;
+        std::ofstream ofs(tempPath, std::ios::binary);
         if (ofs) {
             ofs.write(http.body.data(),
                       static_cast<std::streamsize>(http.body.size()));
-            LOG_INFO("RemoteToml({}/{}): cached to {}",
-                     request.channel, request.component, cachePathText);
+            ofs.close();
+
+            if (MoveFileExW(tempPath.c_str(), cachePath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                LOG_INFO("RemoteToml({}/{}): cached to {}",
+                         request.channel, request.component, cachePathText);
+            } else {
+                std::error_code renameEc;
+                fs::rename(tempPath, cachePath, renameEc);
+                if (!renameEc) {
+                    LOG_INFO("RemoteToml({}/{}): cached to {}",
+                             request.channel, request.component, cachePathText);
+                } else {
+                    LOG_WARN("RemoteToml({}/{}): atomic cache rename failed: {}",
+                             request.channel, request.component, renameEc.message());
+                    fs::remove(tempPath, renameEc);
+                }
+            }
         } else {
             LOG_WARN("RemoteToml({}/{}): could not open {} for writing",
-                     request.channel, request.component, cachePathText);
+                     request.channel, request.component,
+                     OSTPlatform::Encoding::WideToUtf8(tempPath.wstring()));
         }
         out.body = std::move(http.body);
         out.ok = true;
         return out;
     }
 
-    // 5. Remote failed → fall back to whatever is cached for this exact SHA.
-    if (fs::exists(cachePath)) {
-        LOG_WARN("RemoteToml({}/{}): remote failed (last URL {} HTTP {}); "
-                 "falling back to local cache {}",
-                 request.channel, request.component,
-                 lastUrl.empty() ? "<none>" : lastUrl, http.status, cachePathText);
-
-        std::ifstream ifs(cachePath, std::ios::binary);
-        if (ifs) {
-            std::string buf((std::istreambuf_iterator<char>(ifs)),
-                             std::istreambuf_iterator<char>());
-            if (!buf.empty()) {
-                out.body = std::move(buf);
-                out.ok = true;
-                out.fromCache = true;
-                return out;
-            }
-            LOG_WARN("RemoteToml({}/{}): cache file empty: {}",
-                     request.channel, request.component, cachePathText);
-        } else {
-            LOG_WARN("RemoteToml({}/{}): could not open cache file: {}",
-                     request.channel, request.component, cachePathText);
-        }
-    }
-
-    // 6. Total failure — caller handles popup / degraded mode.
+    // 5. Total failure - caller handles popup / degraded mode.
     LOG_WARN("RemoteToml({}/{}): no source available (last URL: {} HTTP {})",
              request.channel, request.component,
              lastUrl.empty() ? "<none>" : lastUrl, http.status);
