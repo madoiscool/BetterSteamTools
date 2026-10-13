@@ -16,7 +16,7 @@ namespace RemoteToml {
         std::string sha256;
     };
 
-    // Fetch remote TOML first, then fall back to the exact local cache entry.
+    // Load exact local cache entry first, then fall back to fetching remote TOML.
     Result Fetch(const Request& request);
 
 } // namespace RemoteToml
