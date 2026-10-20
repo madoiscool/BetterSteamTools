@@ -10,6 +10,7 @@
 #include <shellapi.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -44,6 +45,36 @@ namespace {
             const int lo = HexNibble(hex[i + 1]);
             if (hi < 0 || lo < 0) return std::nullopt;
             out.push_back(static_cast<uint8_t>((hi << 4) | lo));
+        }
+        return out;
+    }
+
+    // Minimal JSON string escaping for a value that is embedded into a request
+    // body. JSON requires that ", \\ and control characters are escaped; without
+    // this a bare quote in the value would terminate the string early and change
+    // the structure of the request.
+    std::string JsonEscape(std::string_view s) {
+        std::string out;
+        out.reserve(s.size() + 8);
+        for (const char c : s) {
+            switch (c) {
+                case '"':  out += "\\\""; break;
+                case '\\': out += "\\\\"; break;
+                case '\b': out += "\\b";  break;
+                case '\f': out += "\\f";  break;
+                case '\n': out += "\\n";  break;
+                case '\r': out += "\\r";  break;
+                case '\t': out += "\\t";  break;
+                default:
+                    if (static_cast<unsigned char>(c) < 0x20) {
+                        char buf[7];
+                        std::snprintf(buf, sizeof(buf), "\\u%04x",
+                                      static_cast<unsigned char>(c));
+                        out += buf;
+                    } else {
+                        out += c;
+                    }
+            }
         }
         return out;
     }
@@ -90,7 +121,7 @@ void Redeem(const std::string& code) {
     namespace CS = OSTPlatform::SteamCredentialStore;
 
     const std::string url = TokeerBaseUrl() + "/drm/redeem";
-    const std::string reqBody = "{\"code\":\"" + code + "\"}";
+    const std::string reqBody = "{\"code\":\"" + JsonEscape(code) + "\"}";
 
     OSTPlatform::Http::Result r = OSTPlatform::Http::Execute(
         L"POST", url.c_str(), reqBody.data(), static_cast<uint32_t>(reqBody.size()),
