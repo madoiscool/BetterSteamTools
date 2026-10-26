@@ -5,6 +5,7 @@
 #include "OSTPlatform/include/Numbers.h"
 #include "OSTPlatform/include/SteamCredentialStore.h"
 #include "Utils/Logging/Log.h"
+#include "OSTPlatform/include/DynamicLibrary.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -14,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <filesystem>
 
 // Code-server base URL, baked in at build time. Empty by default so a public tree ships
 // no deployment's backend; point a build at yours with:
@@ -82,6 +84,54 @@ namespace {
 
     void Warn(const std::string& title, const std::string& msg) {
         OSTPlatform::Dialog::ShowWarning(title, msg);
+    }
+
+    // This DLL lives in the Steam root, so its own directory is the Steam dir.
+    // (The rundll32 URI context never runs InitializeSteamComponents, so the
+    // SteamInstallPath global is not set here — resolve from the module.)
+    std::filesystem::path SteamDirFromSelf() {
+        HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&SteamDirFromSelf), &self);
+        if (!self) return {};
+        return OSTPlatform::DynamicLibrary::GetModuleDirectory(
+            reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(self));
+    }
+
+    // Delete a game's cached achievement schema so Steam re-fetches the current
+    // one (picking up newly-added achievements and the sets/groups layout). arg
+    // is an appid, or "all". The next stat request / achievement-page view pulls
+    // a fresh copy; user unlock state (UserGameStats_*, a separate file) is never
+    // touched.
+    void RefreshAchievements(const std::string& arg) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path statsDir = SteamDirFromSelf() / "appcache" / "stats";
+        if (statsDir.empty() || !fs::exists(statsDir, ec)) {
+            Warn("BetterSteamTools", "Could not locate Steam's stats cache.");
+            return;
+        }
+
+        size_t removed = 0;
+        if (arg == "all") {
+            for (fs::directory_iterator it(statsDir, ec), end; it != end && !ec; it.increment(ec)) {
+                const std::string name = it->path().filename().string();
+                if (name.rfind("UserGameStatsSchema_", 0) == 0 &&
+                    it->path().extension() == ".bin" && fs::remove(it->path(), ec))
+                    ++removed;
+            }
+        } else {
+            const fs::path f = statsDir / ("UserGameStatsSchema_" + arg + ".bin");
+            if (fs::remove(f, ec)) ++removed;
+        }
+
+        LOG_INFO("TokeerBridge: RefreshAchievements('{}') removed {} schema file(s)", arg, removed);
+        OSTPlatform::Dialog::ShowInfo(
+            "Achievements Refreshed",
+            std::to_string(removed) + " achievement schema(s) cleared.\n\n"
+            "Reopen the game's achievement page in Steam to pull the latest "
+            "(including sets/groups). Your unlocks are untouched.");
     }
 
 } // namespace
@@ -175,6 +225,8 @@ void HandleUri(const std::string& rawUrl) {
     if (action == "redeem") {
         if (!arg.empty()) Redeem(arg);
         else Warn("BetterSteamTools", "Missing code in link.");
+    } else if (action == "refreshachievements") {
+        RefreshAchievements(arg.empty() ? "all" : arg);
     } else {
         LOG_WARN("TokeerBridge: unknown action '{}'", action);
     }
