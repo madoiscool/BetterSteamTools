@@ -203,6 +203,55 @@ message CMsgClientGetUserStatsResponse {
 	repeated .CMsgClientGetUserStatsResponse.Achievement_Blocks achievement_blocks = 6;
 }
 
+// ============================================================
+// Player.GetGameAchievements#1 / Player.GetUserAchievements#1
+// New client-UI achievement path ("groups" update). Field numbers
+// verified from the embedded FileDescriptorProto in steamclient64.dll.
+// ============================================================
+message CPlayer_GetGameAchievements_Request {
+	optional uint32 appid = 1;
+	optional string language = 2;
+	optional bool hash_only = 3;
+}
+
+message CPlayer_GetGameAchievements_Response {
+	message Achievement {
+		optional string internal_name = 1;
+		optional uint32 internal_key = 8;
+		optional uint32 groupid = 11;
+	}
+	message Group {
+		optional uint32 groupid = 1;
+	}
+	repeated .CPlayer_GetGameAchievements_Response.Achievement achievements = 1;
+	optional int32 schema_version = 2;
+	repeated .CPlayer_GetGameAchievements_Response.Group groups = 3;
+	optional uint32 schema_hash = 4;
+}
+
+message CPlayer_GetUserAchievements_Request {
+	optional uint64 steamid = 1;
+	optional uint32 appid = 2;
+}
+
+message CPlayer_GetUserAchievements_Response {
+	message Achievement {
+		optional uint32 internal_key = 1;
+		optional bool unlocked = 2;
+		optional fixed32 unlock_time = 3;
+		optional int32 progress_int = 4;
+		optional float progress_float = 5;
+	}
+	message Group {
+		optional uint32 groupid = 1;
+		optional bool is_achievable = 2;
+	}
+	repeated .CPlayer_GetUserAchievements_Response.Achievement achievements = 1;
+	optional int32 schema_version = 2;
+	optional uint32 schema_hash = 3;
+	repeated .CPlayer_GetUserAchievements_Response.Group groups = 4;
+}
+
 message CContentServerDirectory_GetManifestRequestCode_Request {
 	optional uint32 app_id = 1;
 	optional uint32 depot_id = 2;
