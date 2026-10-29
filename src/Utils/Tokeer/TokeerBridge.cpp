@@ -130,8 +130,9 @@ namespace {
         OSTPlatform::Dialog::ShowInfo(
             "Achievements Refreshed",
             std::to_string(removed) + " achievement schema(s) cleared.\n\n"
-            "Reopen the game's achievement page in Steam to pull the latest "
-            "(including sets/groups). Your unlocks are untouched.");
+            "Restart Steam, then open the game's achievement page to pull the "
+            "latest (including sets/groups). A running Steam keeps the old schema "
+            "in memory until restarted. Your unlocks are untouched.");
     }
 
 } // namespace
