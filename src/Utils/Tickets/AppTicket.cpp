@@ -3,6 +3,11 @@
 #include "OSTPlatform/include/SteamCredentialStore.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/Logging/Log.h"
+#include "dllmain.h"
+
+#include <cctype>
+#include <fstream>
+#include <string>
 
 namespace AppTicket {
     // Preference order for the ticket spliced into as the forge source: the
@@ -57,12 +62,94 @@ namespace AppTicket {
         return !ticket.empty() && ticket.size() > kAppTicketSignatureSize;
     }
 
-    // Pick the source ticket to splice into, in preference order:
-    //   1. appid 7
-    //   2. appid 228980
-    //   3. any other appticket observed by the decryption hook
+    // Read the active account's localconfig.vdf and return the FIRST cached
+    // app-ownership ticket big enough to splice into. These are the user's OWN
+    // tickets (Steam writes them here; OST never does), so they carry the user's
+    // SteamID and need no spoofing — and the appid of the base is irrelevant, so
+    // the first valid one works for every game. apptickets is a flat text-VDF
+    // block of "<appid>" "<hexticket>" pairs.
+    static SourceTicket ReadLocalConfigSourceTicket() {
+        SourceTicket pick;
+        if (!SteamInstallPath[0]) return pick;
+
+        uint32_t accountId = 0;
+        std::wstring universe;
+        if (OSTPlatform::SteamCredentialStore::GetActiveUser(accountId, universe)
+                != OSTPlatform::SteamCredentialStore::Status::Ok || accountId == 0) {
+            LOG_DEBUG("ReadLocalConfigSourceTicket: no active user");
+            return pick;
+        }
+
+        const std::string path = std::string(SteamInstallPath) + "\\userdata\\" +
+                                 std::to_string(accountId) + "\\config\\localconfig.vdf";
+        std::ifstream f(path, std::ios::binary);
+        if (!f) { LOG_DEBUG("ReadLocalConfigSourceTicket: cannot open {}", path); return pick; }
+        const std::string data((std::istreambuf_iterator<char>(f)),
+                                std::istreambuf_iterator<char>());
+
+        const size_t sec = data.find("\"apptickets\"");
+        if (sec == std::string::npos) { LOG_DEBUG("ReadLocalConfigSourceTicket: no apptickets section"); return pick; }
+        const size_t open = data.find('{', sec);
+        if (open == std::string::npos) return pick;
+        size_t close = data.find('}', open);           // apptickets is flat — no nested braces
+        if (close == std::string::npos) close = data.size();
+
+        // Walk "<appid>" "<hex>" pairs; stop at the first valid base.
+        size_t pos = open;
+        const auto nextQuoted = [&](std::string& out) -> bool {
+            const size_t a = data.find('"', pos);
+            if (a == std::string::npos || a >= close) return false;
+            const size_t b = data.find('"', a + 1);
+            if (b == std::string::npos || b >= close) return false;
+            out.assign(data, a + 1, b - a - 1);
+            pos = b + 1;
+            return true;
+        };
+        const auto hexVal = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            return c - 'A' + 10;
+        };
+
+        std::string key, val;
+        while (nextQuoted(key) && nextQuoted(val)) {
+            if (key.empty() || key.find_first_not_of("0123456789") != std::string::npos) continue;
+            if (val.size() < 2 || (val.size() % 2) != 0) continue;
+            bool isHex = true;
+            for (char c : val) if (!std::isxdigit(static_cast<unsigned char>(c))) { isHex = false; break; }
+            if (!isHex || val.size() / 2 <= kAppTicketSignatureSize) continue;  // need > signature
+
+            std::vector<uint8_t> bytes;
+            bytes.reserve(val.size() / 2);
+            for (size_t i = 0; i + 1 < val.size(); i += 2)
+                bytes.push_back(static_cast<uint8_t>((hexVal(val[i]) << 4) | hexVal(val[i + 1])));
+
+            pick.appId = static_cast<AppId_t>(strtoul(key.c_str(), nullptr, 10));
+            pick.data = std::move(bytes);
+            LOG_INFO("ReadLocalConfigSourceTicket: using appid {} ticket ({} bytes) as forge base",
+                     pick.appId, pick.data.size());
+            return pick;
+        }
+        LOG_DEBUG("ReadLocalConfigSourceTicket: no valid base ticket in apptickets");
+        return pick;
+    }
+
+    // Pick the source ticket to splice into:
+    //   1. any valid ticket from the active account's localconfig (cached once —
+    //      appId 7 is no longer universally present, but one base forges all)
+    //   2. fallback probes: appid 7, appid 228980, then any appticket the
+    //      decryption hook has observed this session
     // Returns an empty source (appId == 0) when nothing is available.
     static SourceTicket PickForgeSourceTicket() {
+        // One valid base forges every appid, so resolve localconfig once and
+        // keep it for the session. Cache only on success (retry until ready).
+        static SourceTicket cached;
+        if (cached.appId != 0) return cached;
+        if (SourceTicket lc = ReadLocalConfigSourceTicket(); lc.appId != 0) {
+            cached = std::move(lc);
+            return cached;
+        }
+
         SourceTicket pick;
         const auto tryAppId = [&](AppId_t id) -> bool {
             if (id == 0) return false;
