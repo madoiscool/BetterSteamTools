@@ -5,7 +5,12 @@
 #include "Utils/Logging/Log.h"
 
 namespace AppTicket {
-    constexpr AppId_t kLocalAppTicketSourceAppId = 7;
+    // Preference order for the ticket spliced into as the forge source: the
+    // appid-7 ticket first, then appid 228980, then (if both are unavailable)
+    // any other appticket observed in the local ConfigStore. A source only needs
+    // to be a real signed ticket long enough to carry the trailing signature.
+    constexpr AppId_t kPrimaryAppTicketSourceAppId = 7;
+    constexpr AppId_t kFallbackAppTicketSourceAppId = 228980;
     constexpr size_t kSteamIdTicketMinimumSize = 16;
 
     static uint64_t GetSteamIDFromCredentialStore(AppId_t appId) {
@@ -40,24 +45,64 @@ namespace AppTicket {
     }
 
     // Exploit steamdrmp's off-by-four ticket parsing vulnerability:
+    // splice the requested AppId into a cached, signed source ticket just
+    // before its trailing signature. The source may belong to any app — it
+    // only needs to be a real signed ticket long enough to carry a signature.
+    struct SourceTicket {
+        AppId_t appId = 0;
+        std::vector<uint8_t> data;
+    };
+
+    static bool IsValidSourceTicket(const std::vector<uint8_t>& ticket) {
+        return !ticket.empty() && ticket.size() > kAppTicketSignatureSize;
+    }
+
+    // Pick the source ticket to splice into, in preference order:
+    //   1. appid 7
+    //   2. appid 228980
+    //   3. any other appticket observed by the decryption hook
+    // Returns an empty source (appId == 0) when nothing is available.
+    static SourceTicket PickForgeSourceTicket() {
+        SourceTicket pick;
+        const auto tryAppId = [&](AppId_t id) -> bool {
+            if (id == 0) return false;
+            std::vector<uint8_t> ticket = Hooks_Decryption::GetCacheAppOwnershipTicket(id);
+            if (IsValidSourceTicket(ticket)) {
+                pick.appId = id;
+                pick.data = std::move(ticket);
+                return true;
+            }
+            return false;
+        };
+
+        if (tryAppId(kPrimaryAppTicketSourceAppId)) return pick;
+        if (tryAppId(kFallbackAppTicketSourceAppId)) return pick;
+        for (AppId_t id : Hooks_Decryption::GetSeenAppTicketIds()) {
+            if (id == kPrimaryAppTicketSourceAppId || id == kFallbackAppTicketSourceAppId) continue;
+            if (tryAppId(id)) return pick;
+        }
+        LOG_DEBUG("PickForgeSourceTicket: no available source appticket found");
+        return pick;
+    }
+
     static std::vector<uint8_t> ForgeLocalAppOwnershipTicket(AppId_t appId) {
-        std::vector<uint8_t> source = Hooks_Decryption::GetCacheAppOwnershipTicket(kLocalAppTicketSourceAppId);
-        if (source.size() <= kAppTicketSignatureSize) {
+        SourceTicket source = PickForgeSourceTicket();
+        if (source.appId == 0) {
             LOG_DEBUG("ForgeLocalAppOwnershipTicket for AppId {}: no source appticket", appId);
             return {};
         }
 
-        const size_t signedSize = source.size() - kAppTicketSignatureSize;
+        const size_t signedSize = source.data.size() - kAppTicketSignatureSize;
         std::vector<uint8_t> ticket;
-        ticket.reserve(source.size() + sizeof(AppId_t));
-        ticket.insert(ticket.end(), source.begin(), source.begin() + signedSize);
+        ticket.reserve(source.data.size() + sizeof(AppId_t));
+        ticket.insert(ticket.end(), source.data.begin(), source.data.begin() + signedSize);
 
         const uint8_t* appIdBytes = reinterpret_cast<const uint8_t*>(&appId);
         ticket.insert(ticket.end(), appIdBytes, appIdBytes + sizeof(AppId_t));
-        ticket.insert(ticket.end(), source.begin() + signedSize, source.end());
+        ticket.insert(ticket.end(), source.data.begin() + signedSize, source.data.end());
 
         LOG_INFO("Forged App Ownership Ticket, AppId: {}, SourceAppId: {}, Physical Size: {}, Total Size: {}",
-                 appId, kLocalAppTicketSourceAppId, ticket.size(), source.size());
+                 appId, source.appId, ticket.size(), source.data.size());
         return ticket;
     }
 

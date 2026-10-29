@@ -7,6 +7,11 @@ namespace {
 
     void* g_pConfigStoreLocal = nullptr;
 
+    // AppIds of apptickets observed being read from the local user ConfigStore.
+    // Populated by the ConfigStoreGetBinary hook; used by the forge fallback to
+    // search for any available source ticket when appid 7 / 228980 are missing.
+    std::unordered_set<AppId_t> g_seenAppTicketIds;
+
     HOOK_FUNC(ConfigStoreGetBinary, int32, void* pObject, EConfigStore eConfigStore, const char* KeyName, char* Key, uint32 KeySize) {
         if (eConfigStore == k_EConfigStoreUserLocal && pObject && !g_pConfigStoreLocal) {
             g_pConfigStoreLocal = pObject;
@@ -14,8 +19,19 @@ namespace {
 
         }
         std::string name(KeyName);
-        LOG_DECRYPTIONKEY_DEBUG("ConfigStore::GetBinary called for pObject={}, eConfigStore={}, KeyName='{}'", 
+        LOG_DECRYPTIONKEY_DEBUG("ConfigStore::GetBinary called for pObject={}, eConfigStore={}, KeyName='{}'",
                                     pObject, static_cast<uint32>(eConfigStore), name);
+        // Record any appticket key Steam reads from the local store so the forge
+        // fallback can later search for any available source ticket.
+        if (eConfigStore == k_EConfigStoreUserLocal) {
+            const std::string kAppticketPrefix = "apptickets\\";
+            if (name.rfind(kAppticketPrefix, 0) == 0) {
+                const std::string rest = name.substr(kAppticketPrefix.size());
+                if (!rest.empty() && rest.find_first_not_of("0123456789") == std::string::npos) {
+                    g_seenAppTicketIds.insert(static_cast<AppId_t>(std::stoul(rest)));
+                }
+            }
+        }
         // Expected shape: ".../<DepotId>\DecryptionKey"
         if (size_t last = name.find("\\DecryptionKey"); last != std::string::npos) {
             if (size_t start = name.find_last_of("\\", last - 1); start != std::string::npos) {
@@ -79,5 +95,9 @@ namespace Hooks_Decryption {
         }
         LOG_DECRYPTIONKEY_DEBUG("got cached ticket for AppId {} ({} bytes)", appId, ticket.size());
         return ticket;
+    }
+
+    const std::unordered_set<AppId_t>& GetSeenAppTicketIds() {
+        return g_seenAppTicketIds;
     }
 }
