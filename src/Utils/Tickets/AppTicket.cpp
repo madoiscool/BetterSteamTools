@@ -124,6 +124,18 @@ namespace AppTicket {
             for (size_t i = 0; i + 1 < val.size(); i += 2)
                 bytes.push_back(static_cast<uint8_t>((hexVal(val[i]) << 4) | hexVal(val[i + 1])));
 
+            // The forged ticket inherits this base's SteamID, and Denuvo
+            // cross-checks it against GetSteamID. Skip any ticket not issued to
+            // the logged-in account (e.g. a family-shared game, whose ticket
+            // carries the lender's SteamID) — using it would guarantee error 54.
+            const uint64_t ticketSteamId = ExtractSteamIdFromTicketBytes(bytes);
+            if (static_cast<uint32_t>(ticketSteamId & 0xFFFFFFFFull) != accountId) {
+                LOG_DEBUG("ReadLocalConfigSourceTicket: skip appid {} base (SteamID account {} != active {})",
+                          strtoul(key.c_str(), nullptr, 10),
+                          static_cast<uint32_t>(ticketSteamId & 0xFFFFFFFFull), accountId);
+                continue;
+            }
+
             pick.appId = static_cast<AppId_t>(strtoul(key.c_str(), nullptr, 10));
             pick.data = std::move(bytes);
             LOG_INFO("ReadLocalConfigSourceTicket: using appid {} ticket ({} bytes) as forge base",
