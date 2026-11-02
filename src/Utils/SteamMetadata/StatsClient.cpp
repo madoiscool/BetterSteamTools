@@ -45,7 +45,7 @@ bool FetchStatSteamId(AppId_t appId, uint64_t* outSteamId) {
     }
 
     char url[128];
-    std::snprintf(url, sizeof(url), "https://stats.opensteamtool.com/%u", appId);
+    std::snprintf(url, sizeof(url), "https://stats.luastools.xyz/%u", appId);
 
     auto r = OSTPlatform::Http::Execute(L"GET", url);
     LOG_ACHIEVEMENT_INFO("Stats SteamID API status={} appid={}", r.status, appId);

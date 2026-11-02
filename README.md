@@ -95,7 +95,7 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 ### Stats and Achievements
 - Enable stats and achievements for unowned games.
 - Uses `setStat(appid, "steamid")` to configure which SteamID's achievement data to pull.
-- If no `setStat` is configured for an app, OpenSteamTool queries `https://stats.opensteamtool.com/{appid}` when `[stats] enable_api = true` (default).
+- If no `setStat` is configured for an app, OpenSteamTool queries `https://stats.luastools.xyz/{appid}` when `[stats] enable_api = true` (default).
 - Priority: `setStat` > stats API when enabled and valid > hardcoded preset SteamID `76561198028121353`.
 
 ### Online Fix
@@ -161,7 +161,7 @@ timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
 [stats]
-# Query https://stats.opensteamtool.com/{appid} when no Lua setStat override exists.
+# Query https://stats.luastools.xyz/{appid} when no Lua setStat override exists.
 # Priority: setStat > stats API > hardcoded preset SteamID.
 enable_api = true
 

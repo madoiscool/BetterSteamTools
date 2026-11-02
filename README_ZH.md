@@ -92,7 +92,7 @@
 ### 统计和成就
 - 为未拥有的游戏启用统计和成就
 - 使用 `setStat(appid, "steamid")` 配置拉取哪个 SteamID 的成就数据
-- 如果某个应用未配置 `setStat`，当 `[stats] enable_api = true`（默认）时，OpenSteamTool 查询 `https://stats.opensteamtool.com/{appid}`
+- 如果某个应用未配置 `setStat`，当 `[stats] enable_api = true`（默认）时，OpenSteamTool 查询 `https://stats.luastools.xyz/{appid}`
 - 优先级：`setStat` > stats API（启用且有效时）> 硬编码预设 SteamID `76561198028121353`
 
 ### 在线修复
@@ -151,7 +151,7 @@ timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
 [stats]
-# 当没有 Lua setStat 覆盖时查询 https://stats.opensteamtool.com/{appid}
+# 当没有 Lua setStat 覆盖时查询 https://stats.luastools.xyz/{appid}
 # 优先级：setStat > stats API > 硬编码预设 SteamID
 enable_api = true
 

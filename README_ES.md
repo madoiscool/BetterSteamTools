@@ -87,7 +87,7 @@ La herramienta `extract_tickets` vuelca las cadenas hexadecimales de `AppTicket`
 ### Estadísticas y logros
 - Activa las estadísticas y los logros para los juegos que no poseas.
 - Utiliza `setStat(appid, "steamid")` para configurar de qué SteamID se deben extraer los datos de los logros.
-- Si no hay ningún `setStat` configurado para una aplicación, OpenSteamTool consulta `https://stats.opensteamtool.com/{appid}` cuando `[stats] enable_api = true` (valor predeterminado).
+- Si no hay ningún `setStat` configurado para una aplicación, OpenSteamTool consulta `https://stats.luastools.xyz/{appid}` cuando `[stats] enable_api = true` (valor predeterminado).
 - Prioridad: `setStat` > API de estadísticas cuando está habilitada y devuelve un valor válido > SteamID predefinido `76561198028121353`.
 
 ### Online Fix(Reparacion para habilitar el Online)
@@ -144,7 +144,7 @@ timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
 [stats]
-# Consulta https://stats.opensteamtool.com/{appid} cuando no existe setStat en Lua.
+# Consulta https://stats.luastools.xyz/{appid} cuando no existe setStat en Lua.
 # Prioridad: setStat > API de estadísticas > SteamID predefinido.
 enable_api = true
 
