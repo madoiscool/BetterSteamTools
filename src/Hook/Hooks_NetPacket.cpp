@@ -412,16 +412,19 @@ namespace Hooks_NetPacket_UserStats {
         LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats request: original body:\n{}", req.DebugString());
         
         AppId_t appId = req.appid();
-        bool hasShaSchema = req.has_sha_schema() && !req.sha_schema().empty();
-
-        if (hasShaSchema) {
-            LOG_ACHIEVEMENT_WARN("Player::GetUserStats request: sha_schema is present, do not spoof");
-            return false;
-        }
         if (!LuaConfig::HasDepot(appId)) {
             LOG_ACHIEVEMENT_WARN("Player::GetUserStats request: appid={} is not in addappid", appId);
             return false;
         }
+
+        // Spoof the stat SteamID even when sha_schema is present, leaving the sha
+        // on the request. The server then returns a fresh schema whenever its hash
+        // differs from the client's, so lua games pick up newly added achievements
+        // instead of keeping their first-downloaded schema forever. The reply is
+        // handled as in the no-sha path (eresult=OK, stats stripped, schema kept),
+        // so local stats are unaffected.
+        if (req.has_sha_schema() && !req.sha_schema().empty())
+            LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats request: appid={} sha_schema present, spoofing anyway for schema refresh", appId);
 
         // Save jobid_source -> appid for the response handler
         CMsgProtoBufHeader hdr;
