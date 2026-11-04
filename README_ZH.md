@@ -51,9 +51,6 @@
 - 通过 `opensteamtool.toml` 中的一个或多个 `[[inject]]` 条目添加可选的游戏进程 DLL 注入
 - 每个条目设置 `path`（裸文件名相对于 `steam.exe` 解析，绝对路径按原样使用）和可选条件——`when_cmdline`（启动命令中必须包含的子字符串）、`when_appids`（限定特定 appid）和 `all_games`（`true` = 所有游戏，`false` = 仅 Lua 添加的游戏）。当某个 DLL 设置的*所有*条件都匹配时才注入；多个条目可以指向同一游戏，每个 DLL 最多注入一次
 
-### 家庭共享和远程同乐
-- 绕过 Steam 家庭共享限制，适用于通过 Lua 中 `addappid` 添加到库的游戏。参与共享的 Steam 家庭中的所有账户都必须使用 OpenSteamTool 才能生效
-
 ### 兼容 Denuvo 和 SteamStub 保护的游戏
 - 仅 SteamStub 保护的游戏不需要配置 `AppTicket`。OpenSteamTool 可以重用 Steam 本地 ConfigStore 令牌，通过 SteamDRMP 令牌解析漏洞伪造请求的 AppId，无需注入游戏进程
 - Denuvo 保护的游戏仍需要显式令牌数据。OpenSteamTool 通过平台凭据存储保存 `AppTicket` 和 `ETicket`
