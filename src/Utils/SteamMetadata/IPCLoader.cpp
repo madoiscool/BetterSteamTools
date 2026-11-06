@@ -189,7 +189,7 @@ bool Load(const std::string& steamclientPath)
 
     LOG_INFO("IPCLoader: loaded {} methods across {} interfaces ({})",
              MethodCount(), InterfaceCount(),
-             r.fromCache ? "cache fallback" : "remote");
+             r.fromCache ? "cache" : "remote");
     return true;
 }
 
