@@ -50,6 +50,37 @@ namespace {
         return out;
     }
 
+    // Escape a value that is embedded in a JSON string (RFC 8259).
+    // A raw quote, backslash, or control character would otherwise end the
+    // string early and change the request structure. Bytes >= 0x20, including
+    // UTF-8, pass through unchanged.
+    std::string JsonEscape(std::string_view s) {
+        std::string out;
+        out.reserve(s.size() + 8);
+        for (const char ch : s) {
+            const unsigned char c = static_cast<unsigned char>(ch);
+            switch (c) {
+                case '"':  out += "\\\""; break;
+                case '\\': out += "\\\\"; break;
+                case '\b': out += "\\b";  break;
+                case '\f': out += "\\f";  break;
+                case '\n': out += "\\n";  break;
+                case '\r': out += "\\r";  break;
+                case '\t': out += "\\t";  break;
+                default:
+                    if (c < 0x20) {
+                        constexpr char kHex[] = "0123456789abcdef";
+                        out += "\\u00";
+                        out.push_back(kHex[c >> 4]);
+                        out.push_back(kHex[c & 0x0F]);
+                    } else {
+                        out.push_back(ch);
+                    }
+            }
+        }
+        return out;
+    }
+
     // Minimal "key":"value" string extraction from the server's flat JSON reply.
     bool JsonString(std::string_view body, std::string_view key, std::string& out) {
         const std::string needle = "\"" + std::string(key) + "\"";
@@ -141,7 +172,7 @@ void Redeem(const std::string& code) {
     namespace CS = OSTPlatform::SteamCredentialStore;
 
     const std::string url = TokeerBaseUrl() + "/drm/redeem";
-    const std::string reqBody = "{\"code\":\"" + code + "\"}";
+    const std::string reqBody = "{\"code\":\"" + JsonEscape(code) + "\"}";
 
     OSTPlatform::Http::Result r = OSTPlatform::Http::Execute(
         L"POST", url.c_str(), reqBody.data(), static_cast<uint32_t>(reqBody.size()),
