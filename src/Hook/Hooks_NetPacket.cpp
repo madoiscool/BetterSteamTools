@@ -356,8 +356,31 @@ namespace Hooks_NetPacket_AccessToken {
 // ════════════════════════════════════════════════════════════════
 namespace Hooks_NetPacket_UserStats {
 
-    // jobid_source -> appid mapping (eMsg 151 request -> eMsg 147 response)
+    // jobid_source -> appid mapping (eMsg 151 request -> eMsg 147 response).
+    // Send and recv run on Steam's network threads, so the map itself is locked.
+    // Unanswered jobs are capped: a response that never arrives must not grow it
+    // for the whole session.
+    std::mutex g_JobMutex;
     std::unordered_map<uint64, AppId_t> g_JobIdToAppId;
+
+    void RememberJob(uint64 jobId, AppId_t appId) {
+        std::lock_guard<std::mutex> lock(g_JobMutex);
+        if (g_JobIdToAppId.size() >= 128 && !g_JobIdToAppId.count(jobId)) {
+            auto it = g_JobIdToAppId.begin();
+            while (g_JobIdToAppId.size() > 64 && it != g_JobIdToAppId.end())
+                it = g_JobIdToAppId.erase(it);
+        }
+        g_JobIdToAppId[jobId] = appId;
+    }
+
+    bool TakeJob(uint64 jobId, AppId_t& appId) {
+        std::lock_guard<std::mutex> lock(g_JobMutex);
+        auto it = g_JobIdToAppId.find(jobId);
+        if (it == g_JobIdToAppId.end()) return false;
+        appId = it->second;
+        g_JobIdToAppId.erase(it);
+        return true;
+    }
 
     // appid -> group ids, captured from the GetGameAchievements schema so the
     // GetUserAchievements reply can mark each group achievable.
@@ -429,7 +452,7 @@ namespace Hooks_NetPacket_UserStats {
         CMsgProtoBufHeader hdr;
         if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_jobid_source()) {
             uint64 jobId = hdr.jobid_source();
-            g_JobIdToAppId[jobId] = appId;
+            RememberJob(jobId, appId);
             LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats request: stored jobid={} -> appid={}", jobId, appId);
         }
 
@@ -464,12 +487,9 @@ namespace Hooks_NetPacket_UserStats {
         bool hasAppId = false;
         if (hdrMsg.has_jobid_target()) {
             uint64 jobId = hdrMsg.jobid_target();
-            auto it = g_JobIdToAppId.find(jobId);
-            if (it != g_JobIdToAppId.end()) {
-                appId = it->second;
+            if (TakeJob(jobId, appId)) {
                 hasAppId = true;
                 LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: matched jobid={} -> appid={}", jobId, appId);
-                g_JobIdToAppId.erase(it);
             }
         }
 
@@ -686,7 +706,7 @@ namespace Hooks_NetPacket_UserStats {
         if (!LuaConfig::HasDepot(appId)) return;
         CMsgProtoBufHeader hdr;
         if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_jobid_source()) {
-            g_JobIdToAppId[hdr.jobid_source()] = appId;
+            RememberJob(hdr.jobid_source(), appId);
             LOG_ACHIEVEMENT_DEBUG("GetGameAchievements send: jobid={} -> appid={}", hdr.jobid_source(), appId);
         }
     }
@@ -702,7 +722,7 @@ namespace Hooks_NetPacket_UserStats {
             g_UserAchAccount[appId] = static_cast<AccountID_t>(req.steamid() & 0xFFFFFFFFull);
         CMsgProtoBufHeader hdr;
         if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_jobid_source()) {
-            g_JobIdToAppId[hdr.jobid_source()] = appId;
+            RememberJob(hdr.jobid_source(), appId);
             LOG_ACHIEVEMENT_DEBUG("GetUserAchievements send: jobid={} -> appid={}", hdr.jobid_source(), appId);
         }
     }
@@ -713,10 +733,8 @@ namespace Hooks_NetPacket_UserStats {
     {
         CMsgProtoBufHeader hdr;
         if (!hdr.ParseFromArray(pHdr, cbHdr) || !hdr.has_jobid_target()) return;
-        auto it = g_JobIdToAppId.find(hdr.jobid_target());
-        if (it == g_JobIdToAppId.end()) return;
-        const AppId_t appId = it->second;
-        g_JobIdToAppId.erase(it);
+        AppId_t appId = 0;
+        if (!TakeJob(hdr.jobid_target(), appId)) return;
 
         CPlayer_GetGameAchievements_Response resp;
         if (!resp.ParseFromArray(pBody, cbBody)) return;
@@ -757,10 +775,8 @@ namespace Hooks_NetPacket_UserStats {
     {
         CMsgProtoBufHeader hdr;
         if (!hdr.ParseFromArray(pHdr, cbHdr) || !hdr.has_jobid_target()) return;
-        auto it = g_JobIdToAppId.find(hdr.jobid_target());
-        if (it == g_JobIdToAppId.end()) return;
-        const AppId_t appId = it->second;
-        g_JobIdToAppId.erase(it);
+        AppId_t appId = 0;
+        if (!TakeJob(hdr.jobid_target(), appId)) return;
         if (!LuaConfig::HasDepot(appId)) return;
 
         // Header: force eresult OK so the client doesn't treat the game as denied.

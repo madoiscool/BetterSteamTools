@@ -175,13 +175,19 @@ Result Execute(const wchar_t* method,
                 break;
             }
             if (!avail) break;
+            if (maxBodyBytes == 0 || r.body.size() >= maxBodyBytes) break;
 
             const size_t off = r.body.size();
-            r.body.resize(off + avail);
+            const size_t room = static_cast<size_t>(maxBodyBytes) - off;
+            DWORD want = avail;
+            if (static_cast<size_t>(want) > room)
+                want = static_cast<DWORD>(room);
+
+            r.body.resize(off + want);
             DWORD read = 0;
-            if (!WinHttpReadData(hRequest, r.body.data() + off, avail, &read)) {
+            if (!WinHttpReadData(hRequest, r.body.data() + off, want, &read)) {
                 OSTP_LOG_WARN("{} - WinHttpReadData(size={}) failed (error={})",
-                              url ? url : "", avail, GetLastError());
+                              url ? url : "", want, GetLastError());
                 r.body.resize(off);
                 break;
             }
