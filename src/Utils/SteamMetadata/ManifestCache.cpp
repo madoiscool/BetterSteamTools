@@ -184,7 +184,19 @@ bool EnsureCached(AppId_t app, uint32_t depot, uint64_t gid,
         // Transient failures are NOT cached (they should be retried promptly).
         if (notArchived) {
             std::lock_guard<std::mutex> lock(g_negMutex);
-            g_negCache[key] = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            // Distinct 404s are only erased when that exact key is looked up again,
+            // so a long session of missing manifests would grow this map forever.
+            if (g_negCache.size() >= 512) {
+                for (auto it = g_negCache.begin(); it != g_negCache.end(); ) {
+                    if (now - it->second >= kNegativeTtl) it = g_negCache.erase(it);
+                    else ++it;
+                }
+                auto it = g_negCache.begin();
+                while (g_negCache.size() > 256 && it != g_negCache.end())
+                    it = g_negCache.erase(it);
+            }
+            g_negCache[key] = now;
         }
         LOG_MANIFEST_TRACE("ManifestCache: miss app={} depot={} gid={} status={}",
                            app, depot, gid, resp.status);

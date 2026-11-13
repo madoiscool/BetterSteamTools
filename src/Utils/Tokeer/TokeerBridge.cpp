@@ -50,7 +50,59 @@ namespace {
         return out;
     }
 
-    // Minimal "key":"value" string extraction from the server's flat JSON reply.
+    // Percent-decode a URL path segment. Invalid % sequences are left as-is.
+    // '+' stays '+': this is a path, not a query string.
+    std::string UrlDecode(std::string_view in) {
+        std::string out;
+        out.reserve(in.size());
+        for (size_t i = 0; i < in.size(); ++i) {
+            if (in[i] == '%' && i + 2 < in.size()) {
+                const int hi = HexNibble(in[i + 1]);
+                const int lo = HexNibble(in[i + 2]);
+                if (hi >= 0 && lo >= 0) {
+                    out.push_back(static_cast<char>((hi << 4) | lo));
+                    i += 2;
+                    continue;
+                }
+            }
+            out.push_back(in[i]);
+        }
+        return out;
+    }
+
+    // Escape a value that is embedded in a JSON string (RFC 8259).
+    // A raw quote, backslash, or control character would otherwise end the
+    // string early and change the request structure. Bytes >= 0x20, including
+    // UTF-8, pass through unchanged.
+    std::string JsonEscape(std::string_view s) {
+        std::string out;
+        out.reserve(s.size() + 8);
+        for (const char ch : s) {
+            const unsigned char c = static_cast<unsigned char>(ch);
+            switch (c) {
+                case '"':  out += "\\\""; break;
+                case '\\': out += "\\\\"; break;
+                case '\b': out += "\\b";  break;
+                case '\f': out += "\\f";  break;
+                case '\n': out += "\\n";  break;
+                case '\r': out += "\\r";  break;
+                case '\t': out += "\\t";  break;
+                default:
+                    if (c < 0x20) {
+                        constexpr char kHex[] = "0123456789abcdef";
+                        out += "\\u00";
+                        out.push_back(kHex[c >> 4]);
+                        out.push_back(kHex[c & 0x0F]);
+                    } else {
+                        out.push_back(ch);
+                    }
+            }
+        }
+        return out;
+    }
+
+    // Minimal "key":"value" extraction. Respects escapes so a quote inside the
+    // value does not end the string, and unescapes into `out`.
     bool JsonString(std::string_view body, std::string_view key, std::string& out) {
         const std::string needle = "\"" + std::string(key) + "\"";
         size_t k = body.find(needle);
@@ -61,10 +113,53 @@ namespace {
         if (q1 == std::string_view::npos) return false;
         size_t delim = body.find_first_of(",}", colon + 1);
         if (delim != std::string_view::npos && q1 > delim) return false;  // value was null/number
-        size_t q2 = body.find('"', q1 + 1);
-        if (q2 == std::string_view::npos) return false;
-        out = std::string(body.substr(q1 + 1, q2 - q1 - 1));
-        return true;
+
+        std::string value;
+        value.reserve(32);
+        for (size_t i = q1 + 1; i < body.size(); ++i) {
+            const char c = body[i];
+            if (c == '"') {
+                out = std::move(value);
+                return true;
+            }
+            if (c != '\\') {
+                value.push_back(c);
+                continue;
+            }
+            if (++i >= body.size()) return false;
+            const char e = body[i];
+            switch (e) {
+                case '"': case '\\': case '/': value.push_back(e); break;
+                case 'b': value.push_back('\b'); break;
+                case 'f': value.push_back('\f'); break;
+                case 'n': value.push_back('\n'); break;
+                case 'r': value.push_back('\r'); break;
+                case 't': value.push_back('\t'); break;
+                case 'u': {
+                    if (i + 4 >= body.size()) return false;
+                    int cp = 0;
+                    for (int n = 0; n < 4; ++n) {
+                        const int h = HexNibble(body[i + 1 + n]);
+                        if (h < 0) return false;
+                        cp = (cp << 4) | h;
+                    }
+                    i += 4;
+                    if (cp < 0x80) {
+                        value.push_back(static_cast<char>(cp));
+                    } else if (cp < 0x800) {
+                        value.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+                        value.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                    } else {
+                        value.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+                        value.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                        value.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                    }
+                    break;
+                }
+                default: return false;
+            }
+        }
+        return false;
     }
 
     bool JsonTrue(std::string_view body, std::string_view key) {
@@ -122,6 +217,13 @@ namespace {
                     ++removed;
             }
         } else {
+            // The argument arrives from a URL handler. Only a decimal appid is a
+            // filename; anything else (slashes, "..") would escape the stats dir.
+            if (arg.empty() || arg.size() > 10 ||
+                arg.find_first_not_of("0123456789") != std::string::npos) {
+                Warn("BetterSteamTools", "Achievement refresh needs an appid, or \"all\".");
+                return;
+            }
             const fs::path f = statsDir / ("UserGameStatsSchema_" + arg + ".bin");
             if (fs::remove(f, ec)) ++removed;
         }
@@ -141,7 +243,7 @@ void Redeem(const std::string& code) {
     namespace CS = OSTPlatform::SteamCredentialStore;
 
     const std::string url = TokeerBaseUrl() + "/drm/redeem";
-    const std::string reqBody = "{\"code\":\"" + code + "\"}";
+    const std::string reqBody = "{\"code\":\"" + JsonEscape(code) + "\"}";
 
     OSTPlatform::Http::Result r = OSTPlatform::Http::Execute(
         L"POST", url.c_str(), reqBody.data(), static_cast<uint32_t>(reqBody.size()),
@@ -221,7 +323,7 @@ void HandleUri(const std::string& rawUrl) {
 
     const size_t slash = rest.find('/');
     const std::string action = rest.substr(0, slash);
-    const std::string arg = (slash == std::string::npos) ? "" : rest.substr(slash + 1);
+    const std::string arg = UrlDecode((slash == std::string::npos) ? "" : rest.substr(slash + 1));
 
     if (action == "redeem") {
         if (!arg.empty()) Redeem(arg);

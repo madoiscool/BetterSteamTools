@@ -4,8 +4,11 @@
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 
+#include <windows.h>
+
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <string_view>
@@ -81,6 +84,34 @@ namespace {
         return out;
     }
 
+    // Write beside the cache and replace it. A direct truncating write races the
+    // cache-first reader and, if the process dies mid-write, leaves a partial
+    // TOML that the next launch will trust.
+    static bool WriteCacheAtomic(const std::filesystem::path& dest, std::string_view body)
+    {
+        const std::filesystem::path tmp = std::filesystem::path(dest).concat(
+            std::format(".{}.tmp", ::GetCurrentThreadId()));
+        {
+            std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+            if (!ofs) return false;
+            ofs.write(body.data(), static_cast<std::streamsize>(body.size()));
+            ofs.flush();
+            if (!ofs) {
+                ofs.close();
+                std::error_code ec;
+                std::filesystem::remove(tmp, ec);
+                return false;
+            }
+        }
+        if (!MoveFileExA(tmp.string().c_str(), dest.string().c_str(),
+                         MOVEFILE_REPLACE_EXISTING)) {
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
+            return false;
+        }
+        return true;
+    }
+
     // Runs the mirror chain for one component and writes the on-disk cache on a
     // 200. Returns the HTTP result of the last attempt. Used both for the
     // synchronous (no-cache) fetch and the detached background refresh.
@@ -119,14 +150,11 @@ namespace {
         }
 
         if (http.ok && http.status == 200 && !http.body.empty()) {
-            std::ofstream ofs(cachePath, std::ios::binary);
-            if (ofs) {
-                ofs.write(http.body.data(),
-                          static_cast<std::streamsize>(http.body.size()));
+            if (WriteCacheAtomic(cachePath, http.body)) {
                 LOG_INFO("RemoteToml({}/{}): cached to {}",
                          request.channel, request.component, cachePath.string());
             } else {
-                LOG_WARN("RemoteToml({}/{}): could not open {} for writing",
+                LOG_WARN("RemoteToml({}/{}): could not write cache {}",
                          request.channel, request.component, cachePath.string());
             }
         }
