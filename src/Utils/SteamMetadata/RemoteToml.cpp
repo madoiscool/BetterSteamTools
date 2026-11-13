@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iterator>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace RemoteToml {
@@ -16,10 +17,15 @@ namespace RemoteToml {
 namespace {
     // Built-in mirror chain, tried in order. Used when [remote] url_template is unset.
     // Mirrors are independent repos/hosts (not just CDN copies of one repo).
+    // jsDelivr is first on purpose: raw.githubusercontent.com is unreachable on a
+    // lot of networks (returns HTTP=0 and only times out after several seconds),
+    // which used to stall startup ~8s per component before falling through — long
+    // enough that Steam built depot configs before our hooks installed. Lead with
+    // the CDN that actually answers and keep GitHub raw as a last resort.
     constexpr const char* kDefaultTemplates[] = {
-        "https://raw.githubusercontent.com/madoiscool/steam-monitor/{channel}/{component}/{sha256}.toml",
         "https://cdn.jsdelivr.net/gh/madoiscool/steam-monitor@{channel}/{component}/{sha256}.toml",
         "https://git.lua.tools/luatools/steam-monitor/raw/branch/{channel}/{component}/{sha256}.toml",
+        "https://raw.githubusercontent.com/madoiscool/steam-monitor/{channel}/{component}/{sha256}.toml",
     };
 
     static bool HasPlaceholder(std::string_view text, std::string_view placeholder)
@@ -74,6 +80,58 @@ namespace {
             LOG_WARN("RemoteToml: no valid remote.url_template entries; remote fetch disabled");
         return out;
     }
+
+    // Runs the mirror chain for one component and writes the on-disk cache on a
+    // 200. Returns the HTTP result of the last attempt. Used both for the
+    // synchronous (no-cache) fetch and the detached background refresh.
+    static OSTPlatform::Http::Result TryMirrors(Request request,
+                                                std::string sha256,
+                                                std::filesystem::path cachePath)
+    {
+        const std::vector<std::string> urlTemplates = BuildUrlTemplates();
+        OSTPlatform::Http::Result http;
+        std::string lastUrl;
+
+        for (size_t i = 0; i < urlTemplates.size(); ++i) {
+            lastUrl = ExpandTemplate(urlTemplates[i], request, sha256);
+            LOG_INFO("RemoteToml({}/{}): downloading {}",
+                     request.channel, request.component, lastUrl);
+
+            // Short resolve/connect timeouts so a dead mirror (e.g. GitHub raw on a
+            // blocked network) fails in a couple of seconds instead of the long
+            // WinHTTP default, letting the chain reach a working mirror quickly.
+            http = OSTPlatform::Http::Execute(L"GET", lastUrl.c_str(),
+                                              nullptr, 0, nullptr,
+                                              /*timeoutResolve*/ 2500,
+                                              /*timeoutConnect*/ 2500,
+                                              /*timeoutSend*/    5000,
+                                              /*timeoutRecv*/    5000);
+
+            if (http.ok && http.status == 200) break;
+
+            if (i + 1 < urlTemplates.size()) {
+                LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), trying next",
+                         request.channel, request.component, lastUrl, http.ok, http.status);
+            } else {
+                LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), no more mirrors",
+                         request.channel, request.component, lastUrl, http.ok, http.status);
+            }
+        }
+
+        if (http.ok && http.status == 200 && !http.body.empty()) {
+            std::ofstream ofs(cachePath, std::ios::binary);
+            if (ofs) {
+                ofs.write(http.body.data(),
+                          static_cast<std::streamsize>(http.body.size()));
+                LOG_INFO("RemoteToml({}/{}): cached to {}",
+                         request.channel, request.component, cachePath.string());
+            } else {
+                LOG_WARN("RemoteToml({}/{}): could not open {} for writing",
+                         request.channel, request.component, cachePath.string());
+            }
+        }
+        return http;
+    }
 } // namespace
 
 Result Fetch(const Request& request)
@@ -108,79 +166,46 @@ Result Fetch(const Request& request)
                  request.channel, request.component, cacheDir.string(), mkdirEc.message());
     }
 
-    // 3. Try remote (mirror chain with early-out on 404).
-    const std::vector<std::string> urlTemplates = BuildUrlTemplates();
-    OSTPlatform::Http::Result http;
-    std::string lastUrl;
-
-    for (size_t i = 0; i < urlTemplates.size(); ++i) {
-        lastUrl = ExpandTemplate(urlTemplates[i], request, out.sha256);
-        LOG_INFO("RemoteToml({}/{}): downloading {}",
-                 request.channel, request.component, lastUrl);
-
-        http = OSTPlatform::Http::Execute(L"GET", lastUrl.c_str(),
-                                          nullptr, 0, nullptr);
-
-        if (http.ok && http.status == 200) break;
-
-        // Mirrors are independent repos with possibly different coverage, so a 404
-        // (or any non-200) on one does NOT imply the others lack the file — always
-        // fall through to the next mirror.
-        if (i + 1 < urlTemplates.size()) {
-            LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), trying next",
-                     request.channel, request.component, lastUrl, http.ok, http.status);
-        } else {
-            LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), no more mirrors",
-                     request.channel, request.component, lastUrl, http.ok, http.status);
+    // 3. Cache-first. If a TOML for this exact DLL sha is already on disk, use it
+    //    immediately so hooks install without waiting on the network, then refresh
+    //    the cache in the background for next launch. The cache key IS the sha, so a
+    //    cached file is always valid for the running client; a pattern re-published
+    //    for the same sha reaches the user one launch later, which is acceptable.
+    //    (This window used to cost ~8s/component on networks that can't reach the
+    //    first mirror, long enough for Steam to build depot configs unhooked.)
+    {
+        std::error_code ec;
+        if (fs::exists(cachePath, ec) && fs::file_size(cachePath, ec) > 0) {
+            std::ifstream ifs(cachePath, std::ios::binary);
+            std::string buf((std::istreambuf_iterator<char>(ifs)),
+                             std::istreambuf_iterator<char>());
+            if (ifs && !buf.empty()) {
+                out.body = std::move(buf);
+                out.ok = true;
+                out.fromCache = true;
+                LOG_INFO("RemoteToml({}/{}): served from cache {}, refreshing in background",
+                         request.channel, request.component, cachePathText);
+                // Detached refresh — args copied by value; the thread only does an
+                // HTTP GET and a file write, so it is safe past init scope.
+                std::thread(TryMirrors, request, out.sha256, cachePath).detach();
+                return out;
+            }
+            LOG_WARN("RemoteToml({}/{}): cache file unreadable/empty, fetching: {}",
+                     request.channel, request.component, cachePathText);
         }
     }
 
-    // 4. Remote OK → write cache, return body.
+    // 4. No usable cache → fetch synchronously (also writes the cache on success).
+    OSTPlatform::Http::Result http = TryMirrors(request, out.sha256, cachePath);
     if (http.ok && http.status == 200 && !http.body.empty()) {
-        std::ofstream ofs(cachePath, std::ios::binary);
-        if (ofs) {
-            ofs.write(http.body.data(),
-                      static_cast<std::streamsize>(http.body.size()));
-            LOG_INFO("RemoteToml({}/{}): cached to {}",
-                     request.channel, request.component, cachePathText);
-        } else {
-            LOG_WARN("RemoteToml({}/{}): could not open {} for writing",
-                     request.channel, request.component, cachePathText);
-        }
         out.body = std::move(http.body);
         out.ok = true;
         return out;
     }
 
-    // 5. Remote failed → fall back to whatever is cached for this exact SHA.
-    if (fs::exists(cachePath)) {
-        LOG_WARN("RemoteToml({}/{}): remote failed (last URL {} HTTP {}); "
-                 "falling back to local cache {}",
-                 request.channel, request.component,
-                 lastUrl.empty() ? "<none>" : lastUrl, http.status, cachePathText);
-
-        std::ifstream ifs(cachePath, std::ios::binary);
-        if (ifs) {
-            std::string buf((std::istreambuf_iterator<char>(ifs)),
-                             std::istreambuf_iterator<char>());
-            if (!buf.empty()) {
-                out.body = std::move(buf);
-                out.ok = true;
-                out.fromCache = true;
-                return out;
-            }
-            LOG_WARN("RemoteToml({}/{}): cache file empty: {}",
-                     request.channel, request.component, cachePathText);
-        } else {
-            LOG_WARN("RemoteToml({}/{}): could not open cache file: {}",
-                     request.channel, request.component, cachePathText);
-        }
-    }
-
-    // 6. Total failure — caller handles popup / degraded mode.
-    LOG_WARN("RemoteToml({}/{}): no source available (last URL: {} HTTP {})",
-             request.channel, request.component,
-             lastUrl.empty() ? "<none>" : lastUrl, http.status);
+    // 5. No cache and the fetch failed → degraded; caller handles popup.
+    LOG_WARN("RemoteToml({}/{}): no source available (HTTP {})",
+             request.channel, request.component, http.status);
     return out;
 }
 
