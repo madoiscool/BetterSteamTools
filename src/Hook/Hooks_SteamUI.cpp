@@ -4,6 +4,7 @@
 #include "dllmain.h"
 #include "steam_messages.pb.h"
 #include "Utils/HookSupport/VehCommon.h"
+#include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include <mutex>
 #include <unordered_set>
 #include <vector>
@@ -117,8 +118,25 @@ namespace Hooks_SteamUI
 
         RESOLVE_U(RepeatedFieldUint32_Add);
 
+        // These functions have different signatures and must never share a hook
+        // target. Bad metadata has mapped FillInAppOverview to the full-snapshot
+        // builder, which passes a different third argument (not a CSteamApp).
+        void* fillOverview = PatternLoader::FindPattern(ui_hModule, "FillInAppOverview");
+        void* buildOverview = PatternLoader::FindPattern(ui_hModule, "BuildCompleteAppOverviewChange");
+        const bool conflictingOverviewHooks = fillOverview && fillOverview == buildOverview;
+        if (conflictingOverviewHooks) {
+            LOG_WARN("SteamUI: FillInAppOverview and BuildCompleteAppOverviewChange resolve to the same address; skipping the date-added hook");
+            SteamDiagnostics::ShowWarning(
+                "OpenSteamTool - Conflicting SteamUI Patterns",
+                "FillInAppOverview and BuildCompleteAppOverviewChange resolve to the same address.\n\n"
+                "The date-added hook is disabled for this session. Update the steamui patterns and restart Steam.\n\n"
+                "Please report this at:\nhttps://github.com/madoiscool/BetterSteamTools/issues");
+        }
+
         HOOK_BEGIN();
-        INSTALL_HOOK_U(FillInAppOverview);
+        if (!conflictingOverviewHooks) {
+            INSTALL_HOOK_U(FillInAppOverview);
+        }
         INSTALL_HOOK_U(BuildCompleteAppOverviewChange);
         INSTALL_HOOK_U(CSteamUIAppControllerRunFrame);
         HOOK_END();
