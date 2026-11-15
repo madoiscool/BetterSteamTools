@@ -201,6 +201,12 @@ namespace {
         Hooks_Package::TryDumpOwnedDepots();
 
         if (LuaConfig::HasDepot(appId,false)) {
+            // Keep Steam's current family license, including any lock or expiry.
+            if (result && pOwn && pOwn->PackageId != kInjectedPackageId &&
+                (pOwn->bFamilyShared || pOwn->bBorrowed)) {
+                return result;
+            }
+
             if (result && pOwn->ExistInPackageNums > 1) {
                 // Actually owned — record so HasDepot excludes it going forward
                 LuaConfig::MarkOwned(appId);
